@@ -1,0 +1,262 @@
+-- Whi: Tween Rápido + Refresh
+-- Por: DeepSeek-R1
+
+local Player = game:GetService("Players").LocalPlayer
+local Character = Player.Character or Player.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+-- Configurações
+local TWEEN_SPEED = 8  -- Muito mais rápido (valor menor = mais rápido)
+local MAX_DISTANCE = 1000
+local FOLLOW_DISTANCE = 10
+local COLOR_CHANGE_DISTANCE = 50
+
+-- Variáveis
+local wildHorses = {}
+local currentHorseIndex = 1
+local currentTween = nil
+local isFollowing = false
+local horseHighlights = {}
+local screenGui, refreshButton
+
+-- Função para encontrar cavalos selvagens
+local function findWildHorses()
+    -- Limpar destaques antigos
+    for model, highlight in pairs(horseHighlights) do
+        if highlight then
+            highlight:Destroy()
+        end
+    end
+    horseHighlights = {}
+    wildHorses = {}
+    
+    -- Procurar em todos os descendentes do Workspace
+    for _, descendant in ipairs(workspace:GetDescendants()) do
+        if descendant:IsA("Model") then
+            local hasHumanoid = descendant:FindFirstChildOfClass("Humanoid")
+            local hasRootPart = descendant:FindFirstChild("HumanoidRootPart")
+            local hasWildTag = string.find(descendant.Name, "{") -- Adaptado para Wild Horse Islands
+            
+            if hasHumanoid and hasRootPart and hasWildTag then
+                local distance = (descendant.HumanoidRootPart.Position - Character.HumanoidRootPart.Position).Magnitude
+                
+                if distance <= MAX_DISTANCE then
+                    table.insert(wildHorses, {
+                        Model = descendant,
+                        RootPart = descendant.HumanoidRootPart
+                    })
+                    
+                    -- Criar highlight
+                    local highlight = Instance.new("Highlight")
+                    highlight.Name = "WildHorseHighlight"
+                    highlight.Adornee = descendant
+                    highlight.FillTransparency = 0.5
+                    highlight.OutlineTransparency = 0
+                    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    highlight.Parent = descendant
+                    horseHighlights[descendant] = highlight
+                end
+            end
+        end
+    end
+    
+    return #wildHorses
+end
+
+-- Função para tween ultra rápido até o cavalo
+local function fastTweenToHorse(target)
+    if not target or not target.RootPart then return end
+    
+    -- Cancelar tween atual se existir
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
+    end
+    
+    local rootPart = Character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
+    
+    local targetPos = target.RootPart.Position + Vector3.new(0, 3, -5)  -- 5 unidades atrás do cavalo
+    
+    -- Configuração do tween rápido
+    local tweenInfo = TweenInfo.new(
+        (rootPart.Position - targetPos).Magnitude / TWEEN_SPEED,
+        Enum.EasingStyle.Linear,  -- Mais rápido que Quad
+        Enum.EasingDirection.Out
+    )
+    
+    currentTween = TweenService:Create(rootPart, tweenInfo, {
+        CFrame = CFrame.new(targetPos, target.RootPart.Position)
+    })
+    
+    currentTween:Play()
+    return currentTween
+end
+
+-- Função para seguir o cavalo continuamente
+local function followHorseContinuously()
+    if #wildHorses == 0 then return end
+    
+    while isFollowing do
+        local horse = wildHorses[currentHorseIndex]
+        if not horse or not horse.RootPart then break end
+        
+        -- Verificar distância até o cavalo
+        local distance = (horse.RootPart.Position - Character.HumanoidRootPart.Position).Magnitude
+        
+        -- Se estiver longe, mover até o cavalo
+        if distance > FOLLOW_DISTANCE then
+            fastTweenToHorse(horse)
+        end
+        
+        -- Esperar antes da próxima verificação
+        task.wait(0.5)
+    end
+end
+
+-- Função para atualizar cores do ESP baseado na distância
+local function updateESPColors()
+    for horseModel, highlight in pairs(horseHighlights) do
+        if horseModel:IsDescendantOf(workspace) and horseModel:FindFirstChild("HumanoidRootPart") then
+            local distance = (horseModel.HumanoidRootPart.Position - Character.HumanoidRootPart.Position).Magnitude
+            
+            -- Calcular cor baseada na distância (verde perto, vermelho longe)
+            local colorRatio = math.clamp(distance / COLOR_CHANGE_DISTANCE, 0, 1)
+            local color = Color3.new(colorRatio, 1 - colorRatio, 0)
+            
+            highlight.FillColor = color
+            highlight.OutlineColor = color
+        else
+            -- Remover highlight se o cavalo não existir mais
+            if highlight then
+                highlight:Destroy()
+            end
+            horseHighlights[horseModel] = nil
+        end
+    end
+end
+
+-- Mover para o próximo cavalo
+local function moveToNextHorse()
+    if #wildHorses == 0 then return end
+    
+    currentHorseIndex = (currentHorseIndex % #wildHorses) + 1
+    isFollowing = true
+    followHorseContinuously()
+end
+
+-- Mover para o cavalo anterior
+local function moveToPrevHorse()
+    if #wildHorses == 0 then return end
+    
+    currentHorseIndex = currentHorseIndex - 1
+    if currentHorseIndex < 1 then
+        currentHorseIndex = #wildHorses
+    end
+    
+    isFollowing = true
+    followHorseContinuously()
+end
+
+-- Função para atualizar a lista de cavalos
+local function refreshHorses()
+    -- Resetar variáveis
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
+    end
+    
+    isFollowing = false
+    currentHorseIndex = 1
+    
+    -- Encontrar novos cavalos
+    local horseCount = findWildHorses()
+    
+    -- Começar a seguir novamente se encontrou cavalos
+    if horseCount > 0 then
+        isFollowing = true
+        followHorseContinuously()
+    end
+    
+    return horseCount
+end
+
+-- Criar GUI para mobile com botão de refresh
+local function createMobileGUI()
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "WHI_HorseTracker"
+    screenGui.Parent = Player:WaitForChild("PlayerGui")
+    screenGui.ResetOnSpawn = false
+    
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Size = UDim2.new(0.5, 0, 0.18, 0)
+    mainFrame.Position = UDim2.new(0.05, 0, 0.78, 0)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    mainFrame.BackgroundTransparency = 0.3
+    mainFrame.Parent = screenGui
+    
+    local nextButton = Instance.new("TextButton")
+    nextButton.Text = "PRÓXIMO"
+    nextButton.Size = UDim2.new(0.3, 0, 1, 0)
+    nextButton.Position = UDim2.new(0, 5, 0, 0)
+    nextButton.BackgroundColor3 = Color3.fromRGB(80, 160, 220)
+    nextButton.TextColor3 = Color3.new(1, 1, 1)
+    nextButton.TextScaled = true
+    nextButton.Parent = mainFrame
+    nextButton.MouseButton1Click:Connect(moveToNextHorse)
+    
+    local prevButton = Instance.new("TextButton")
+    prevButton.Text = "ANTERIOR"
+    prevButton.Size = UDim2.new(0.3, 0, 1, 0)
+    prevButton.Position = UDim2.new(0.35, 0, 0, 0)
+    prevButton.BackgroundColor3 = Color3.fromRGB(80, 160, 220)
+    prevButton.TextColor3 = Color3.new(1, 1, 1)
+    prevButton.TextScaled = true
+    prevButton.Parent = mainFrame
+    prevButton.MouseButton1Click:Connect(moveToPrevHorse)
+    
+    -- Botão de Refresh
+    refreshButton = Instance.new("TextButton")
+    refreshButton.Text = "🔄 ATUALIZAR"
+    refreshButton.Size = UDim2.new(0.3, 0, 1, 0)
+    refreshButton.Position = UDim2.new(0.7, 0, 0, 0)
+    refreshButton.BackgroundColor3 = Color3.fromRGB(180, 80, 180)
+    refreshButton.TextColor3 = Color3.new(1, 1, 1)
+    refreshButton.TextScaled = true
+    refreshButton.Parent = mainFrame
+    refreshButton.MouseButton1Click:Connect(refreshHorses)
+    
+    return screenGui
+end
+
+-- Inicialização
+local function initialize()
+    -- Esperar pelo personagem estar pronto
+    while not Character:FindFirstChild("HumanoidRootPart") do
+        task.wait(1)
+    end
+    
+    -- Criar GUI
+    createMobileGUI()
+    
+    -- Encontrar cavalos inicialmente
+    refreshHorses()
+    
+    -- Loop principal para atualizar ESP
+    RunService.Heartbeat:Connect(updateESPColors)
+    
+    -- Atualizar lista de cavalos periodicamente
+    while true do
+        task.wait(15)
+        refreshHorses()
+    end
+end
+
+-- Iniciar script
+task.spawn(initialize)
+
+print("Wild Horse Islands Horse Tracker ativado! Tween Speed: " .. TWEEN_SPEED)
