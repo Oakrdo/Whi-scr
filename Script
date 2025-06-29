@@ -10,7 +10,7 @@ local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 
 -- Configurações
-local TWEEN_SPEED = 8  -- Muito mais rápido (valor menor = mais rápido)
+local TWEEN_SPEED = 40 -- Muito mais rápido (valor menor = mais rápido)
 local MAX_DISTANCE = 1000
 local FOLLOW_DISTANCE = 10
 local COLOR_CHANGE_DISTANCE = 50
