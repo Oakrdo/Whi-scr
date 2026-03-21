@@ -1,26 +1,34 @@
--- Horse Tracker PRO (TWEEN SIMPLES) 
--- Tween clássico sem monitor/teleporte/lastSafePosition
--- Mantido: scan ordenado, visited (fila), anti-roubo, GUI mobile com scroll/touch
+-- Horse Tracker PRO MAX (OTIMIZADO FINAL)
+
+--------------------------------------------------
+-- LOAD RAYFIELD
+--------------------------------------------------
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+	Name = "🐎 Horse Tracker PRO MAX",
+	LoadingTitle = "Carregando...",
+	ConfigurationSaving = {Enabled = false}
+})
+
+local Tab = Window:CreateTab("Main", 4483362458)
 
 --------------------------------------------------
 -- SERVICES
 --------------------------------------------------
-local Players      = game:GetService("Players")
+local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local RunService   = game:GetService("RunService")
-local UIS          = game:GetService("UserInputService")
-local Workspace    = game:GetService("Workspace")
+local Workspace = game:GetService("Workspace")
 
 --------------------------------------------------
 -- PLAYER
 --------------------------------------------------
 local Player = Players.LocalPlayer
-local PlayerGui = Player:WaitForChild("PlayerGui")
-local Character, HRP, Humanoid
+local Character, HRP
+
 local function bind(char)
 	Character = char
 	HRP = char:WaitForChild("HumanoidRootPart")
-	Humanoid = char:FindFirstChildWhichIsA("Humanoid")
 end
 bind(Player.Character or Player.CharacterAdded:Wait())
 Player.CharacterAdded:Connect(bind)
@@ -31,8 +39,7 @@ Player.CharacterAdded:Connect(bind)
 local FOLLOW_DIST = 6
 local HEIGHT = 3
 local MAX_DIST = 1300
-local PLAYER_AVOID = 35
-local LOOP_DELAY = 0.28
+local PLAYER_AVOID = 40
 
 --------------------------------------------------
 -- STATE
@@ -41,430 +48,260 @@ local horses = {}
 local index = 1
 local following = false
 local tween = nil
-local noclip = nil
-local highlights = {}
 local visited = {}
+local highlights = {}
 
 local TWEEN_SPEED = 140
-local MIN_SPEED = 60
-local MAX_SPEED = 300
-local SPEED_STEP = 20
+local stealth = true
 
-local captureTimes = {}
-local function recordCapture() table.insert(captureTimes, os.clock()) end
+--------------------------------------------------
+-- SCAN CONTROL (ANTI LAG)
+--------------------------------------------------
+local lastScan = 0
+local SCAN_COOLDOWN = 1.5
+
+--------------------------------------------------
+-- STATS
+--------------------------------------------------
+local captures = {}
+
+local function addCapture()
+	table.insert(captures, os.clock())
+end
+
 local function getPerHour()
 	local now = os.clock()
-	for i = #captureTimes, 1, -1 do
-		if now - captureTimes[i] > 3600 then
-			table.remove(captureTimes, i)
+	for i = #captures,1,-1 do
+		if now - captures[i] > 3600 then
+			table.remove(captures,i)
 		end
 	end
-	return #captureTimes
+	return #captures
 end
 
 --------------------------------------------------
 -- UTILS
 --------------------------------------------------
-local function safeDist(a,b)
-	if not a or not b then return math.huge end
+local function dist(a,b)
 	return (a.Position - b.Position).Magnitude
-end
-local function dist(a,b) return safeDist(a,b) end
-
-local function horseHasRider(horse)
-	for _,d in ipairs(horse:GetDescendants()) do
-		if d:IsA("Seat") or d:IsA("VehicleSeat") then
-			if d.Occupant then return true end
-		end
-	end
-	return false
 end
 
 local function playerNear(horse)
-	if not horse or not horse:FindFirstChild("HumanoidRootPart") then return true end
 	for _,p in ipairs(Players:GetPlayers()) do
 		if p ~= Player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-			local ok, d = pcall(function() return dist(p.Character.HumanoidRootPart, horse.HumanoidRootPart) end)
-			if ok and d and d < PLAYER_AVOID then return true end
+			if dist(p.Character.HumanoidRootPart, horse.HumanoidRootPart) < PLAYER_AVOID then
+				return true
+			end
 		end
 	end
-	if horseHasRider(horse) then return true end
 	return false
 end
 
 --------------------------------------------------
--- NOCLIP (simples)
+-- ESP (OTIMIZADO)
 --------------------------------------------------
-local function enableNoClip()
-	if noclip then return end
-	noclip = RunService.Stepped:Connect(function()
-		if not Character then return end
-		for _,v in ipairs(Character:GetDescendants()) do
-			if v:IsA("BasePart") then v.CanCollide = false end
-		end
-	end)
-end
-local function disableNoClip()
-	if noclip then noclip:Disconnect() noclip = nil end
-end
-
---------------------------------------------------
--- ESP
---------------------------------------------------
-local function clearESP()
-	for _,h in pairs(highlights) do
-		if h and h.Parent then pcall(function() h:Destroy() end) end
-	end
-	table.clear(highlights)
-end
-
 local function applyESP()
-	clearESP()
-	for i,h in ipairs(horses) do
-		if h and h:IsA("Model") and h:FindFirstChild("HumanoidRootPart") then
-			pcall(function()
-				local hl = Instance.new("Highlight")
-				hl.Adornee = h
-				hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-				hl.FillTransparency = 0.45
-				hl.OutlineTransparency = 0
-				hl.FillColor = (i == index) and Color3.fromRGB(90,160,255) or Color3.fromRGB(90,255,130)
-				hl.OutlineColor = hl.FillColor
-				hl.Parent = h
-				highlights[h] = hl
-			end)
+	for h,hl in pairs(highlights) do
+		if not h or not h.Parent then
+			if hl then hl:Destroy() end
+			highlights[h] = nil
 		end
+	end
+
+	for i,h in ipairs(horses) do
+		if not highlights[h] then
+			local hl = Instance.new("Highlight")
+			hl.Adornee = h
+			hl.FillTransparency = 0.5
+			hl.Parent = h
+			highlights[h] = hl
+		end
+
+		highlights[h].FillColor =
+			(i == index)
+			and Color3.fromRGB(90,160,255)
+			or Color3.fromRGB(90,255,130)
 	end
 end
 
 --------------------------------------------------
--- SCAN (ordenado, nearest -> farthest)
+-- SCAN (OTIMIZADO)
 --------------------------------------------------
-local function clearVisited() table.clear(visited) end
-
 local function scan()
-	table.clear(horses)
-	if not HRP then return end
+	if tick() - lastScan < SCAN_COOLDOWN then return end
+	lastScan = tick()
 
-	local tmp = {}
+	table.clear(horses)
+
 	for _,m in ipairs(Workspace:GetDescendants()) do
 		if m:IsA("Model")
 		and m:FindFirstChild("Humanoid")
 		and m:FindFirstChild("HumanoidRootPart")
 		and string.find(m.Name, "{") then
-			local ok, d = pcall(function() return dist(m.HumanoidRootPart, HRP) end)
-			if ok and d and d < MAX_DIST then
-				if not playerNear(m) then
-					table.insert(tmp, {model = m, d = d})
-				end
+
+			local d = dist(m.HumanoidRootPart, HRP)
+			if d < MAX_DIST then
+				table.insert(horses, m)
 			end
 		end
 	end
 
-	table.sort(tmp, function(a,b) return a.d < b.d end)
+	table.sort(horses, function(a,b)
+		return dist(a.HumanoidRootPart, HRP) < dist(b.HumanoidRootPart, HRP)
+	end)
 
-	for i = 1, #tmp do horses[i] = tmp[i].model end
-	for i = #tmp+1, #horses do horses[i] = nil end
-
-	-- point index to nearest if any
-	if #horses > 0 then
-		index = 1
-	else
-		index = 1
-	end
-
+	index = (#horses >= 2) and 2 or 1
 	applyESP()
 end
 
 --------------------------------------------------
--- SIMPLE TWEEN MOVEMENT (NO SAFETY MONITORS)
--- Uses classic position based on horse HRP + offset
+-- MELHOR ALVO
 --------------------------------------------------
-local function goTo(horse, markVisited)
-	if not horse or not horse:IsDescendantOf(Workspace) then
-		scan()
-		return
-	end
-	if not horse:FindFirstChild("HumanoidRootPart") then
-		scan()
-		return
-	end
-	-- anti-roubo quick check
-	if playerNear(horse) then
-		scan()
-		return
+local function getBestHorse()
+	for i = 2, #horses do
+		local h = horses[i]
+		if h and not visited[h] then
+			if not stealth or not playerNear(h) then
+				return i
+			end
+		end
 	end
 
-	-- cancel existing tween if any
-	if tween then
-		pcall(function() tween:Cancel() end)
-		tween = nil
+	for i = 2, #horses do
+		if horses[i] then return i end
 	end
 
-	enableNoClip()
-
-	-- compute desired pos exactly like original: behind horse at fixed FOLLOW_DIST and height
-	local pos = horse.HumanoidRootPart.Position + Vector3.new(0, HEIGHT, -FOLLOW_DIST)
-	local time = dist(HRP, horse.HumanoidRootPart) / math.max(1, TWEEN_SPEED)
-	if time < 0.08 then time = 0.08 end
-
-	tween = TweenService:Create(HRP, TweenInfo.new(time, Enum.EasingStyle.Linear), {CFrame = CFrame.new(pos, horse.HumanoidRootPart.Position)})
-	tween:Play()
-	tween.Completed:Once(function()
-		disableNoClip()
-	end)
-
-	-- mark visited if requested (for follow-mode non-repetition)
-	if markVisited then visited[horse] = true end
-end
-
---------------------------------------------------
--- visited helpers
---------------------------------------------------
-local function allVisited()
-	if #horses == 0 then return false end
-	for i=1,#horses do
-		if not visited[horses[i]] then return false end
-	end
-	return true
-end
-
-local function findNextUnvisited(startIdx)
-	if #horses == 0 then return nil end
-	for i = startIdx, #horses do
-		if not visited[horses[i]] then return i end
-	end
-	for i = 1, startIdx-1 do
-		if not visited[horses[i]] then return i end
-	end
 	return nil
 end
 
 --------------------------------------------------
--- MAIN LOOP (auto-next when target disappears) - uses simple tween
+-- MOVIMENTO (SEM LAG)
 --------------------------------------------------
-local lastHorse = nil
-task.spawn(function()
-	while true do
-		task.wait(LOOP_DELAY)
-		if not following then continue end
+local function goTo(horse)
+	if not horse or not horse:IsDescendantOf(Workspace) then return end
+	if stealth and playerNear(horse) then return end
 
-		-- if followed horse disappeared -> capture, scan, go to next unvisited
-		if lastHorse and not lastHorse:IsDescendantOf(Workspace) then
-			recordCapture()
-			scan()
-			lastHorse = nil
+	if tween then pcall(function() tween:Cancel() end) end
 
-			-- reset visited if all visited
-			if allVisited() then clearVisited() end
+	local hrpHorse = horse.HumanoidRootPart
+	local look = hrpHorse.CFrame.LookVector
+	local pos = hrpHorse.Position - (look * FOLLOW_DIST) + Vector3.new(0, HEIGHT, 0)
 
-			if following and #horses > 0 then
-				local nextIdx = findNextUnvisited(index)
-				if not nextIdx then nextIdx = findNextUnvisited(1) end
-				if nextIdx then
-					index = nextIdx
-					local nextHorse = horses[index]
-					if nextHorse then
-						goTo(nextHorse, true) -- mark visited
-					end
-				end
+	local time = dist(HRP, hrpHorse) / TWEEN_SPEED
+
+	tween = TweenService:Create(
+		HRP,
+		TweenInfo.new(math.max(time,0.08), Enum.EasingStyle.Linear),
+		{CFrame = CFrame.new(pos, hrpHorse.Position)}
+	)
+
+	tween:Play()
+
+	-- MONITOR LEVE (SEM HEARTBEAT)
+	task.spawn(function()
+		while tween do
+			task.wait(0.25)
+
+			if stealth and playerNear(horse) then
+				pcall(function() tween:Cancel() end)
+				tween = nil
+				scan()
+				break
+			end
+
+			if not horse:IsDescendantOf(Workspace) then
+				pcall(function() tween:Cancel() end)
+				tween = nil
+				break
 			end
 		end
-
-		-- normal follow flow
-		local h = horses[index]
-		if not h or not h:IsDescendantOf(Workspace) then
-			scan()
-			continue
-		end
-
-		lastHorse = h
-		if HRP and dist(HRP, h.HumanoidRootPart) > FOLLOW_DIST then
-			-- don't mark visited here (mark when starting follow)
-			goTo(h, false)
-		end
-	end
-end)
-
---------------------------------------------------
--- GUI (mobile scroll + touch fallback)
---------------------------------------------------
-local gui = Instance.new("ScreenGui")
-gui.Name = "HorseTrackerGUI"
-gui.ResetOnSpawn = false
-gui.Parent = PlayerGui
-
-local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 320, 0, 320)
-frame.Position = UDim2.new(0.06, 0, 0.48, 0)
-frame.BackgroundColor3 = Color3.fromRGB(28,28,38)
-frame.Active = true
-frame.Draggable = true
-frame.ClipsDescendants = true
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0,14)
-
-local header = Instance.new("Frame", frame)
-header.Size = UDim2.new(1,0,0,48)
-header.BackgroundTransparency = 1
-
-local title = Instance.new("TextLabel", header)
-title.Size = UDim2.new(1,-48,1,0)
-title.Position = UDim2.new(0,12,0,0)
-title.BackgroundTransparency = 1
-title.Text = "🐎 Horse Tracker PRO"
-title.Font = Enum.Font.GothamBold
-title.TextSize = 18
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.TextColor3 = Color3.new(1,1,1)
-title.Parent = header
-
-local minBtn = Instance.new("TextButton", header)
-minBtn.Size = UDim2.new(0,36,0,36)
-minBtn.Position = UDim2.new(1,-44,0,6)
-minBtn.Text = "–"
-minBtn.Font = Enum.Font.GothamBold
-minBtn.TextSize = 20
-minBtn.BackgroundColor3 = Color3.fromRGB(60,60,80)
-minBtn.TextColor3 = Color3.new(1,1,1)
-Instance.new("UICorner", minBtn)
-
-local content = Instance.new("ScrollingFrame", frame)
-content.Position = UDim2.new(0, 0, 0, 48)
-content.Size = UDim2.new(1, 0, 1, -48)
-content.BackgroundTransparency = 1
-content.ScrollBarThickness = 8
-content.AutomaticCanvasSize = Enum.AutomaticSize.None
-content.CanvasSize = UDim2.new(0,0,0,0)
-content.Parent = frame
-
-local layout = Instance.new("UIListLayout", content)
-layout.Padding = UDim.new(0,10)
-layout.SortOrder = Enum.SortOrder.LayoutOrder
-layout.VerticalAlignment = Enum.VerticalAlignment.Top
-
-local pad = Instance.new("Frame", content)
-pad.Size = UDim2.new(1,0,0,8)
-pad.BackgroundTransparency = 1
-
-local status = Instance.new("TextLabel", content)
-status.Size = UDim2.new(1,-24,0,22)
-status.BackgroundTransparency = 1
-status.Font = Enum.Font.Gotham
-status.TextSize = 14
-status.TextXAlignment = Enum.TextXAlignment.Left
-status.TextColor3 = Color3.fromRGB(200,200,200)
-
-local counter = Instance.new("TextLabel", content)
-counter.Size = UDim2.new(1,-24,0,22)
-counter.BackgroundTransparency = 1
-counter.Font = Enum.Font.Gotham
-counter.TextSize = 14
-counter.TextXAlignment = Enum.TextXAlignment.Left
-counter.TextColor3 = Color3.fromRGB(180,220,255)
-
-local speedLabel = Instance.new("TextLabel", content)
-speedLabel.Size = UDim2.new(1,-24,0,20)
-speedLabel.BackgroundTransparency = 1
-speedLabel.Font = Enum.Font.Gotham
-speedLabel.TextSize = 13
-speedLabel.TextXAlignment = Enum.TextXAlignment.Left
-speedLabel.TextColor3 = Color3.fromRGB(200,200,200)
-
-local function makeButton(text, color, cb)
-	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(0.92, 0, 0, 44)
-	b.AnchorPoint = Vector2.new(0.5,0)
-	b.Position = UDim2.new(0.5, 0, 0, 0)
-	b.BackgroundColor3 = color
-	b.Font = Enum.Font.GothamBold
-	b.Text = text
-	b.TextSize = 16
-	b.TextColor3 = Color3.new(1,1,1)
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0,10)
-	b.Parent = content
-	b.MouseButton1Click:Connect(cb)
-	b.InputBegan:Connect(function(inp) if inp.UserInputType == Enum.UserInputType.Touch then cb() end end)
-	return b
+	end)
 end
 
-local btnFollow = makeButton("▶ Seguir (fila)", Color3.fromRGB(80,130,200), function()
-	scan()
-	if #horses == 0 then following = false return end
-	if allVisited() then clearVisited() end
-	local candidate = findNextUnvisited(index) or findNextUnvisited(1)
-	if candidate then
-		index = candidate
-		applyESP()
-		following = true
-		goTo(horses[index], true)
+--------------------------------------------------
+-- LOOP PRINCIPAL (LEVE)
+--------------------------------------------------
+task.spawn(function()
+	while true do
+		task.wait(0.4)
+
+		if following then
+			local h = horses[index]
+
+			if not h or not h:IsDescendantOf(Workspace) then
+				addCapture()
+				scan()
+
+				local nextIndex = getBestHorse()
+				if nextIndex then
+					index = nextIndex
+				end
+				continue
+			end
+
+			if dist(HRP, h.HumanoidRootPart) > FOLLOW_DIST + 1 then
+				goTo(h)
+			end
+
+			visited[h] = true
+		end
 	end
 end)
 
-local btnRefresh = makeButton("🔄 Atualizar Lista (reseta fila)", Color3.fromRGB(70,120,120), function()
-	scan()
-	applyESP()
-	clearVisited()
-end)
+--------------------------------------------------
+-- UI
+--------------------------------------------------
+local info = Tab:CreateLabel("Cavalos/h: 0")
 
-local btnNext = makeButton("⏭ Próximo Cavalo (manual)", Color3.fromRGB(90,90,130), function()
-	if #horses == 0 then return end
-	index = math.clamp(index + 1, 1, #horses)
-	applyESP()
-	local h = horses[index]
-	if following and h and h:IsDescendantOf(Workspace) then
-		goTo(h, true)
+Tab:CreateToggle({
+	Name = "▶ Auto Farm",
+	CurrentValue = false,
+	Callback = function(v)
+		following = v
+		if v then
+			scan()
+			local i = getBestHorse()
+			if i then
+				index = i
+				goTo(horses[index])
+			end
+		end
 	end
-end)
+})
 
-local btnMinus = makeButton("➖ Velocidade", Color3.fromRGB(90,90,120), function()
-	TWEEN_SPEED = math.clamp(TWEEN_SPEED - SPEED_STEP, MIN_SPEED, MAX_SPEED)
-end)
-
-local btnPlus = makeButton("➕ Velocidade", Color3.fromRGB(90,90,120), function()
-	TWEEN_SPEED = math.clamp(TWEEN_SPEED + SPEED_STEP, MIN_SPEED, MAX_SPEED)
-end)
-
-local btnStop = makeButton("⛔ Parar", Color3.fromRGB(140,80,80), function()
-	following = false
-	if tween then pcall(function() tween:Cancel() end) end
-	disableNoClip()
-end)
-
--- touch scroll fallback
-local isTouchScrolling, touchStartY, canvasStartY = false, 0, 0
-content.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.Touch then
-		isTouchScrolling = true
-		touchStartY = input.Position.Y
-		canvasStartY = content.CanvasPosition.Y
+Tab:CreateToggle({
+	Name = "🛰️ Modo Stealth",
+	CurrentValue = true,
+	Callback = function(v)
+		stealth = v
 	end
-end)
-content.InputChanged:Connect(function(input)
-	if isTouchScrolling and input.UserInputType == Enum.UserInputType.Touch then
-		local delta = input.Position.Y - touchStartY
-		local targetY = math.clamp(canvasStartY - delta, 0, math.max(0, content.CanvasSize.Y.Offset - content.AbsoluteSize.Y))
-		content.CanvasPosition = Vector2.new(0, targetY)
+})
+
+Tab:CreateSlider({
+	Name = "⚡ Velocidade",
+	Range = {60,300},
+	Increment = 10,
+	CurrentValue = 140,
+	Callback = function(v)
+		TWEEN_SPEED = v
 	end
-end)
-content.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.Touch then isTouchScrolling = false end
-end)
+})
 
-RunService.Heartbeat:Connect(function()
-	local h = layout.AbsoluteContentSize.Y + 20
-	content.CanvasSize = UDim2.new(0,0,0,h)
-	local maxY = math.max(0, content.CanvasSize.Y.Offset - content.AbsoluteSize.Y)
-	if content.CanvasPosition.Y > maxY then content.CanvasPosition = Vector2.new(0, maxY) end
+Tab:CreateButton({
+	Name = "🔄 Atualizar",
+	Callback = function()
+		scan()
+	end
+})
 
-	status.Text = following and string.format("🎯 Seguindo: %d / %d", index, #horses) or "⏸️ Parado"
-	counter.Text = "📈 Cavalos / hora: " .. getPerHour()
-	speedLabel.Text = "⚡ Velocidade: " .. TWEEN_SPEED
-end)
-
-minBtn.MouseButton1Click:Connect(function()
-	content.Visible = not content.Visible
-	frame.Size = content.Visible and UDim2.new(0,320,0,320) or UDim2.new(0,320,0,48)
-	minBtn.Text = content.Visible and "–" or "+"
+--------------------------------------------------
+-- UPDATE UI
+--------------------------------------------------
+task.spawn(function()
+	while true do
+		task.wait(1)
+		info:Set("Cavalos/h: "..getPerHour())
+	end
 end)
 
 --------------------------------------------------
@@ -472,4 +309,3 @@ end)
 --------------------------------------------------
 scan()
 applyESP()
-print("🐎 Horse Tracker PRO (tween simples) carregado")
