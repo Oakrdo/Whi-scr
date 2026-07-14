@@ -1,311 +1,1294 @@
--- Horse Tracker PRO MAX (OTIMIZADO FINAL)
+-- 🐎🌱⛏️❄️ Auto Farm PRO MAX - v25.0
+-- NOVO: Save de Configurações | Auto Server Hop quando ilha sem cavalos
 
---------------------------------------------------
--- LOAD RAYFIELD
---------------------------------------------------
+print("🔧 [v25.0] Iniciando script com Save e Auto Hop...")
+
+local success, err = pcall(function()
+
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+print("✅ Rayfield carregado")
 
-local Window = Rayfield:CreateWindow({
-	Name = "🐎 Horse Tracker PRO MAX",
-	LoadingTitle = "Carregando...",
-	ConfigurationSaving = {Enabled = false}
-})
-
-local Tab = Window:CreateTab("Main", 4483362458)
-
---------------------------------------------------
--- SERVICES
---------------------------------------------------
+-- 🆕 SERVIÇOS ADICIONAIS
+local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local Workspace = game:GetService("Workspace")
+local TeleportService = game:GetService("TeleportService")
 
---------------------------------------------------
--- PLAYER
---------------------------------------------------
 local Player = Players.LocalPlayer
-local Character, HRP
-
-local function bind(char)
-	Character = char
-	HRP = char:WaitForChild("HumanoidRootPart")
+local Character = Player.Character or Player.CharacterAdded:Wait()
+local HRP = Character:WaitForChild("HumanoidRootPart", 10)
+if not HRP then
+    error("❌ HumanoidRootPart não encontrado!")
 end
-bind(Player.Character or Player.CharacterAdded:Wait())
-Player.CharacterAdded:Connect(bind)
+print("✅ HRP encontrado")
+
+local PLAYER_NAME = Player.Name
+local activeTween = nil
+local tweenSpeed = 100
 
 --------------------------------------------------
--- CONFIG
+-- 🆕 SISTEMA DE SAVE/LOAD DE CONFIGURAÇÕES
 --------------------------------------------------
-local FOLLOW_DIST = 6
-local HEIGHT = 3
-local MAX_DIST = 1300
-local PLAYER_AVOID = 40
+local CONFIG_FILE = "AutoFarm_PROMAX_Config.json"
+local savedConfig = {}
 
---------------------------------------------------
--- STATE
---------------------------------------------------
-local horses = {}
-local index = 1
-local following = false
-local tween = nil
-local visited = {}
-local highlights = {}
+local function loadConfig()
+    local success, result = pcall(function()
+        if isfile(CONFIG_FILE) then
+            local content = readfile(CONFIG_FILE)
+            return HttpService:JSONDecode(content)
+        end
+        return nil
+    end)
+    if success and result then
+        savedConfig = result
+        print("📂 Config carregada:", CONFIG_FILE)
+        return true
+    else
+        savedConfig = {}
+        print("📂 Nenhuma config salva, usando padrão")
+        return false
+    end
+end
 
-local TWEEN_SPEED = 140
-local stealth = true
+local function saveConfig()
+    local config = {
+        -- Farms ativos
+        farmingHerds = farmingHerds,
+        farmingNormalHorses = farmingNormalHorses,
+        farmingCollector = farmingCollector,
+        farmingRocks = farmingRocks,
+        farmingSnowballs = farmingSnowballs,
 
---------------------------------------------------
--- SCAN CONTROL (ANTI LAG)
---------------------------------------------------
-local lastScan = 0
-local SCAN_COOLDOWN = 1.5
+        -- Configurações
+        selectedBreed = selectedBreed,
+        ignoreTamedHorses = ignoreTamedHorses,
+        onlyOreRocks = onlyOreRocks,
+        tweenSpeed = tweenSpeed,
+        autoRejoin = autoRejoin,
+        autoHopNoHorses = autoHopNoHorses,
 
---------------------------------------------------
+        -- Filtros de coletáveis
+        excludeItems = excludeItems,
+
+        -- Versão
+        version = "v25.0"
+    }
+    pcall(function()
+        writefile(CONFIG_FILE, HttpService:JSONEncode(config))
+        print("💾 Config salva!")
+    end)
+end
+
+-- 🆕 Auto-save a cada 30 segundos
+task.spawn(function()
+    while true do
+        task.wait(30)
+        saveConfig()
+    end
+end)
+
+-- ESTADOS
+local farmingHerds = false
+local farmingNormalHorses = false
+local farmingCollector = false
+local farmingRocks = false
+local farmingSnowballs = false
+local autoRejoin = true
+local autoHopNoHorses = false  -- 🆕 NOVO: Auto hop quando sem cavalos
+local selectedBreed = "Qualquer"
+local ignoreTamedHorses = true
+
+-- ESTADOS PAUSADOS
+local pausedCollector = false
+local pausedRocks = false
+local pausedSnowballs = false
+
+-- SISTEMA DE PRIORIDADE
+local horsePriorityActive = false
+local currentHorseTarget = nil
+
+-- FILTROS
+local excludeItems = {
+    algodao = false, trigo = false, milho = false, bush = false,
+    flor = false, berry = false, coco = false, perola = false,
+    concha = false, item = false,
+}
+
+local onlyOreRocks = false
+
 -- STATS
---------------------------------------------------
-local captures = {}
+local startTime = os.clock()
+local herdCount = 0
+local collectorCount = 0
+local rockCount = 0
+local snowballCount = 0
+local skippedByPlayer = 0
+local currentTarget = "Nenhum"
 
-local function addCapture()
-	table.insert(captures, os.clock())
+-- 🆕 CONTADOR DE TEMPO SEM CAVALOS (para auto hop)
+local lastHorseFoundTime = os.clock()
+local NO_HORSE_TIMEOUT = 15  -- segundos sem cavalo antes do hop
+
+--------------------------------------------------
+-- SISTEMA DE SERVIDOR
+--------------------------------------------------
+local function serverHop()
+    local servers = {}
+    local res = game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100")
+    local data = HttpService:JSONDecode(res)
+    for _, v in pairs(data.data) do
+        if v.playing < v.maxPlayers and v.id ~= game.JobId then
+            table.insert(servers, v.id)
+        end
+    end
+    if #servers > 0 then
+        pcall(function()
+            Rayfield:Notify({Title = "🚀 Server Hop", Content = "Trocando de servidor...", Duration = 3})
+        end)
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, servers[math.random(1, #servers)])
+    else
+        pcall(function()
+            Rayfield:Notify({Title = "⚠️ Server Hop", Content = "Nenhum servidor disponível!", Duration = 3})
+        end)
+    end
 end
 
-local function getPerHour()
-	local now = os.clock()
-	for i = #captures,1,-1 do
-		if now - captures[i] > 3600 then
-			table.remove(captures,i)
-		end
-	end
-	return #captures
-end
-
---------------------------------------------------
--- UTILS
---------------------------------------------------
-local function dist(a,b)
-	return (a.Position - b.Position).Magnitude
-end
-
-local function playerNear(horse)
-	for _,p in ipairs(Players:GetPlayers()) do
-		if p ~= Player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-			if dist(p.Character.HumanoidRootPart, horse.HumanoidRootPart) < PLAYER_AVOID then
-				return true
-			end
-		end
-	end
-	return false
-end
-
---------------------------------------------------
--- ESP (OTIMIZADO)
---------------------------------------------------
-local function applyESP()
-	for h,hl in pairs(highlights) do
-		if not h or not h.Parent then
-			if hl then hl:Destroy() end
-			highlights[h] = nil
-		end
-	end
-
-	for i,h in ipairs(horses) do
-		if not highlights[h] then
-			local hl = Instance.new("Highlight")
-			hl.Adornee = h
-			hl.FillTransparency = 0.5
-			hl.Parent = h
-			highlights[h] = hl
-		end
-
-		highlights[h].FillColor =
-			(i == index)
-			and Color3.fromRGB(90,160,255)
-			or Color3.fromRGB(90,255,130)
-	end
-end
-
---------------------------------------------------
--- SCAN (OTIMIZADO)
---------------------------------------------------
-local function scan()
-	if tick() - lastScan < SCAN_COOLDOWN then return end
-	lastScan = tick()
-
-	table.clear(horses)
-
-	for _,m in ipairs(Workspace:GetDescendants()) do
-		if m:IsA("Model")
-		and m:FindFirstChild("Humanoid")
-		and m:FindFirstChild("HumanoidRootPart")
-		and string.find(m.Name, "{") then
-
-			local d = dist(m.HumanoidRootPart, HRP)
-			if d < MAX_DIST then
-				table.insert(horses, m)
-			end
-		end
-	end
-
-	table.sort(horses, function(a,b)
-		return dist(a.HumanoidRootPart, HRP) < dist(b.HumanoidRootPart, HRP)
-	end)
-
-	index = (#horses >= 2) and 2 or 1
-	applyESP()
-end
-
---------------------------------------------------
--- MELHOR ALVO
---------------------------------------------------
-local function getBestHorse()
-	for i = 2, #horses do
-		local h = horses[i]
-		if h and not visited[h] then
-			if not stealth or not playerNear(h) then
-				return i
-			end
-		end
-	end
-
-	for i = 2, #horses do
-		if horses[i] then return i end
-	end
-
-	return nil
-end
-
---------------------------------------------------
--- MOVIMENTO (SEM LAG)
---------------------------------------------------
-local function goTo(horse)
-	if not horse or not horse:IsDescendantOf(Workspace) then return end
-	if stealth and playerNear(horse) then return end
-
-	if tween then pcall(function() tween:Cancel() end) end
-
-	local hrpHorse = horse.HumanoidRootPart
-	local look = hrpHorse.CFrame.LookVector
-	local pos = hrpHorse.Position - (look * FOLLOW_DIST) + Vector3.new(0, HEIGHT, 0)
-
-	local time = dist(HRP, hrpHorse) / TWEEN_SPEED
-
-	tween = TweenService:Create(
-		HRP,
-		TweenInfo.new(math.max(time,0.08), Enum.EasingStyle.Linear),
-		{CFrame = CFrame.new(pos, hrpHorse.Position)}
-	)
-
-	tween:Play()
-
-	-- MONITOR LEVE (SEM HEARTBEAT)
-	task.spawn(function()
-		while tween do
-			task.wait(0.25)
-
-			if stealth and playerNear(horse) then
-				pcall(function() tween:Cancel() end)
-				tween = nil
-				scan()
-				break
-			end
-
-			if not horse:IsDescendantOf(Workspace) then
-				pcall(function() tween:Cancel() end)
-				tween = nil
-				break
-			end
-		end
-	end)
-end
-
---------------------------------------------------
--- LOOP PRINCIPAL (LEVE)
---------------------------------------------------
-task.spawn(function()
-	while true do
-		task.wait(0.4)
-
-		if following then
-			local h = horses[index]
-
-			if not h or not h:IsDescendantOf(Workspace) then
-				addCapture()
-				scan()
-
-				local nextIndex = getBestHorse()
-				if nextIndex then
-					index = nextIndex
-				end
-				continue
-			end
-
-			if dist(HRP, h.HumanoidRootPart) > FOLLOW_DIST + 1 then
-				goTo(h)
-			end
-
-			visited[h] = true
-		end
-	end
+pcall(function()
+    game:GetService("CoreGui").RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
+        if autoRejoin and child.Name == "ErrorPrompt" then
+            task.wait(2)
+            TeleportService:Teleport(game.PlaceId, Player)
+        end
+    end)
 end)
 
 --------------------------------------------------
--- UI
+-- FIX RESPAWN
 --------------------------------------------------
-local info = Tab:CreateLabel("Cavalos/h: 0")
-
-Tab:CreateToggle({
-	Name = "▶ Auto Farm",
-	CurrentValue = false,
-	Callback = function(v)
-		following = v
-		if v then
-			scan()
-			local i = getBestHorse()
-			if i then
-				index = i
-				goTo(horses[index])
-			end
-		end
-	end
-})
-
-Tab:CreateToggle({
-	Name = "🛰️ Modo Stealth",
-	CurrentValue = true,
-	Callback = function(v)
-		stealth = v
-	end
-})
-
-Tab:CreateSlider({
-	Name = "⚡ Velocidade",
-	Range = {60,300},
-	Increment = 10,
-	CurrentValue = 140,
-	Callback = function(v)
-		TWEEN_SPEED = v
-	end
-})
-
-Tab:CreateButton({
-	Name = "🔄 Atualizar",
-	Callback = function()
-		scan()
-	end
-})
-
---------------------------------------------------
--- UPDATE UI
---------------------------------------------------
-task.spawn(function()
-	while true do
-		task.wait(1)
-		info:Set("Cavalos/h: "..getPerHour())
-	end
+Player.CharacterAdded:Connect(function(char)
+    print("🔄 Respawn detectado!")
+    Character = char
+    local newHRP = char:WaitForChild("HumanoidRootPart", 10)
+    if newHRP then
+        HRP = newHRP
+        print("✅ HRP reconectado")
+    else
+        print("❌ Falha ao reconectar HRP!")
+    end
+    if activeTween then
+        pcall(function() activeTween:Cancel() end)
+        activeTween = nil
+    end
 end)
 
 --------------------------------------------------
--- START
+-- UTILIDADES BASE
 --------------------------------------------------
-scan()
-applyESP()
+local function dist(a, b)
+    if not a or not b then return math.huge end
+    local posA = typeof(a) == "Vector3" and a or (a.Position or a.p)
+    local posB = typeof(b) == "Vector3" and b or (b.Position or b.p)
+    if not posA or not posB then return math.huge end
+    return (posA - posB).Magnitude
+end
+
+local function stopMovement()
+    if activeTween then
+        pcall(function() activeTween:Cancel() end)
+        activeTween = nil
+    end
+end
+
+local function moveTo(pos, lookAt)
+    stopMovement()
+    if not HRP or not HRP.Parent then return nil end
+
+    local targetPos = typeof(pos) == "Vector3" and pos or pos.Position
+    local targetCF
+    if lookAt then
+        local lookPos = typeof(lookAt) == "Vector3" and lookAt or lookAt.Position
+        targetCF = CFrame.new(targetPos, lookPos)
+    else
+        targetCF = CFrame.new(targetPos)
+    end
+
+    local d = (targetPos - HRP.Position).Magnitude
+    local t = math.max(d / tweenSpeed, 0.1)
+
+    activeTween = TweenService:Create(HRP, TweenInfo.new(t, Enum.EasingStyle.Linear), {CFrame = targetCF})
+    activeTween:Play()
+
+    return activeTween
+end
+
+local function pressE()
+    VirtualInputManager:SendKeyEvent(true, "E", false, game)
+    task.wait(0.1)
+    VirtualInputManager:SendKeyEvent(false, "E", false, game)
+end
+
+local function activateTool()
+    local tool = Character:FindFirstChildOfClass("Tool")
+    if tool then
+        tool:Activate()
+        return true
+    end
+    return false
+end
+
+--------------------------------------------------
+-- ANTI-PLAYER
+--------------------------------------------------
+local function isPlayerNear(position, radius)
+    if not position then return true end
+    radius = radius or 25
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= Player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            local playerHRP = p.Character.HumanoidRootPart
+            if playerHRP and (playerHRP.Position - position).Magnitude < radius then
+                return true, p.Name
+            end
+        end
+    end
+    return false, nil
+end
+
+--------------------------------------------------
+-- ILHA ATUAL
+--------------------------------------------------
+local function getCurrentIsland()
+    if not HRP then return nil end
+    local islands = Workspace:FindFirstChild("Islands")
+    if not islands then return nil end
+    for _, island in ipairs(islands:GetChildren()) do
+        if island:FindFirstChild(PLAYER_NAME) then
+            return island
+        end
+    end
+    local nearest, minDist = nil, math.huge
+    for _, island in ipairs(islands:GetChildren()) do
+        local part = island:FindFirstChildWhichIsA("BasePart", true)
+        if part then
+            local d = dist(HRP, part)
+            if d < minDist and d < 500 then
+                local hasTerrain = island:FindFirstChild("Terrain") 
+                    or island:FindFirstChild("Sand") 
+                    or island:FindFirstChild("Grass")
+                    or island:FindFirstChild("Ground")
+                if hasTerrain then
+                    minDist = d
+                    nearest = island
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+--------------------------------------------------
+-- SISTEMA DE CAVALOS
+--------------------------------------------------
+local function getHorseLabels(horse)
+    if not horse or not horse:IsA("Model") then return nil, nil end
+    local ohp = horse:FindFirstChild("OverheadPart")
+    if not ohp then return nil, nil end
+    local oh = ohp:FindFirstChild("Overhead")
+    if not oh then return nil, nil end
+    local bl = oh:FindFirstChild("BreedLabel")
+    local nl = oh:FindFirstChild("NameLabel")
+    local breedText = bl and bl:IsA("TextLabel") and bl.Text or nil
+    local nameText = nl and nl:IsA("TextLabel") and nl.Text or nil
+    return breedText, nameText
+end
+
+local function isHorseTamed(horse)
+    local breedText, nameText = getHorseLabels(horse)
+    if breedText and string.find(breedText, "'") then return true, breedText end
+    return false, breedText
+end
+
+local function isMyHorse(horse)
+    local breedText, _ = getHorseLabels(horse)
+    if not breedText then return false end
+    local lowerBreed = string.lower(breedText)
+    local lowerName = string.lower(PLAYER_NAME)
+    if string.find(lowerBreed, lowerName .. "'s") then return true end
+    return false
+end
+
+local function isHerd(horse)
+    if not horse or not horse:IsA("Model") then return false end
+    if not string.find(horse.Name, "{") then return false end
+    if not horse:FindFirstChild("HumanoidRootPart") then return false end
+    if not horse:FindFirstChild("Humanoid") then return false end
+    if horse.Parent ~= Workspace then return false end
+    local breedText, nameText = getHorseLabels(horse)
+    if nameText and string.lower(nameText) == "wild" then return true end
+    return false
+end
+
+local function isWildHorse(horse)
+    if not horse or not horse:IsA("Model") then return false end
+    if not string.find(horse.Name, "{") then return false end
+    if not horse:FindFirstChild("HumanoidRootPart") then return false end
+    if not horse:FindFirstChild("Humanoid") then return false end
+    local parent = horse.Parent
+    local isInIsland = false
+    while parent do
+        if parent.Name == "Islands" or (parent.Parent and parent.Parent.Name == "Islands") then
+            isInIsland = true
+            break
+        end
+        parent = parent.Parent
+    end
+    if not isInIsland then return false end
+    local breedText, nameText = getHorseLabels(horse)
+    if nameText and string.lower(nameText) == "wild" then return true end
+    if breedText and not string.find(breedText, "'") then return true end
+    return false
+end
+
+local function getHorseBreedForFilter(horse)
+    local breedText, _ = getHorseLabels(horse)
+    if not breedText then return "Desconhecida" end
+    local pure = string.match(breedText, "'s%s+(.+)$") or breedText
+    return pure
+end
+
+local function checkHorseState(horse)
+    if not horse then return "gone" end
+    if not horse.Parent then return "gone" end
+
+    local hrpHorse = horse:FindFirstChild("HumanoidRootPart")
+    if not hrpHorse then return "gone" end
+
+    if isMyHorse(horse) then return "mine" end
+
+    local isTamed, _ = isHorseTamed(horse)
+    if isTamed then return "tamed" end
+
+    return "wild"
+end
+
+--------------------------------------------------
+-- SISTEMA DE PRIORIDADE
+--------------------------------------------------
+local function pauseOtherFarms()
+    if farmingCollector then
+        pausedCollector = true
+        farmingCollector = false
+        print("⏸️ Coletor PAUSADO")
+    end
+    if farmingRocks then
+        pausedRocks = true
+        farmingRocks = false
+        print("⏸️ Pedras PAUSADO")
+    end
+    if farmingSnowballs then
+        pausedSnowballs = true
+        farmingSnowballs = false
+        print("⏸️ Snowballs PAUSADO")
+    end
+end
+
+local function resumeOtherFarms()
+    if pausedCollector then
+        farmingCollector = true
+        pausedCollector = false
+        print("▶️ Coletor RETOMADO")
+    end
+    if pausedRocks then
+        farmingRocks = true
+        pausedRocks = false
+        print("▶️ Pedras RETOMADO")
+    end
+    if pausedSnowballs then
+        farmingSnowballs = true
+        pausedSnowballs = false
+        print("▶️ Snowballs RETOMADO")
+    end
+end
+
+local function resetPriority()
+    horsePriorityActive = false
+    currentHorseTarget = nil
+    print("🔄 Prioridade RESETADA")
+end
+
+--------------------------------------------------
+-- COLETÁVEIS
+--------------------------------------------------
+local function getCollectibleInfo(model)
+    if not model or not model:IsA("Model") then return nil, nil end
+
+    if string.find(model.Name, "{") then
+        local children = model:GetChildren()
+        if #children == 1 and children[1].Name == "Primary" and (children[1]:IsA("BasePart") or children[1]:IsA("MeshPart")) then
+            if not excludeItems.concha then
+                return "concha", children[1]
+            end
+        end
+    end
+
+    local children = model:GetChildren()
+    if #children == 1 and children[1]:IsA("BasePart") and children[1].Name == "Part" then
+        if not excludeItems.perola then
+            return "perola", children[1]
+        end
+    end
+
+    local targetPart = nil
+    local itemType = nil
+
+    for _, child in ipairs(model:GetDescendants()) do
+        if child:IsA("BasePart") or child:IsA("MeshPart") then
+            local name = string.lower(child.Name)
+
+            if string.find(name, "cotton") then
+                if not excludeItems.algodao then targetPart = child; itemType = "algodao"; break end
+            end
+            if string.find(name, "wheat") then
+                if not excludeItems.trigo then targetPart = child; itemType = "trigo"; break end
+            end
+            if string.find(name, "corn") then
+                if not excludeItems.milho then targetPart = child; itemType = "milho"; break end
+            end
+            if string.find(name, "bush") then
+                if not excludeItems.bush then targetPart = child; itemType = "bush"; break end
+            end
+            if string.find(name, "flower") then
+                if not excludeItems.flor then targetPart = child; itemType = "flor"; break end
+            end
+            if string.find(name, "berry") then
+                if not excludeItems.berry then targetPart = child; itemType = "berry"; break end
+            end
+            if string.find(name, "coconut") then
+                if not excludeItems.coco then targetPart = child; itemType = "coco"; break end
+            end
+            if string.find(name, "pearl") or string.find(name, "perola") then
+                if not excludeItems.perola then targetPart = child; itemType = "perola"; break end
+            end
+            if string.find(name, "shell") or string.find(name, "conch") then
+                if not excludeItems.concha then targetPart = child; itemType = "concha"; break end
+            end
+            if name == "bounds" or name == "hitbox" then
+                if not excludeItems.item then targetPart = child; itemType = "item" end
+            end
+        end
+    end
+
+    return itemType, targetPart
+end
+
+--------------------------------------------------
+-- PEDRAS
+--------------------------------------------------
+local function isRockModel(model)
+    if not model or not model:IsA("Model") then return false, nil end
+    if not string.find(model.Name, "{") then return false, nil end
+    if isWildHorse(model) or isHerd(model) then return false, nil end
+
+    local isOre = false
+    local rockPart = nil
+
+    for _, child in ipairs(model:GetDescendants()) do
+        if child:IsA("BasePart") then
+            local name = string.lower(child.Name)
+
+            if name == "rocks" then
+                isOre = true
+                rockPart = child
+            end
+            if string.find(name, "rocks") and not rockPart then
+                rockPart = child
+            end
+        end
+    end
+
+    if onlyOreRocks and not isOre then
+        return false, nil
+    end
+
+    return rockPart ~= nil, rockPart
+end
+
+local function isSnowballModel(model)
+    if not model or not model:IsA("Model") then return false, nil end
+    for _, child in ipairs(model:GetDescendants()) do
+        if child:IsA("BasePart") or child:IsA("MeshPart") then
+            if string.find(string.lower(child.Name), "snowball") then
+                return true, child
+            end
+        end
+    end
+    return false, nil
+end
+
+--------------------------------------------------
+-- LOOPS PRINCIPAIS
+--------------------------------------------------
+
+-- 1. AUTO HERDS
+task.spawn(function()
+    print("🐎 Loop Herds iniciado")
+    while true do
+        task.wait(0.4)
+        if not farmingHerds or not HRP or not HRP.Parent then continue end
+
+        local target, minDist = nil, math.huge
+
+        for _, m in ipairs(Workspace:GetChildren()) do
+            if isHerd(m) then
+                local hrpHorse = m:FindFirstChild("HumanoidRootPart")
+                if hrpHorse then
+                    local hasPlayer, _ = isPlayerNear(hrpHorse.Position, 50)
+                    if not hasPlayer then
+                        local d = dist(hrpHorse, HRP)
+                        if d < minDist then
+                            minDist = d
+                            target = m
+                        end
+                    else
+                        skippedByPlayer += 1
+                    end
+                end
+            end
+        end
+
+        if target and farmingHerds then
+            local hrpHorse = target.HumanoidRootPart
+            local breedText, _ = getHorseLabels(target)
+            currentTarget = "Herd: " .. (breedText or "?")
+
+            local distToHerd = dist(hrpHorse, HRP)
+            if distToHerd > 12 then
+                local pos = hrpHorse.Position - (hrpHorse.CFrame.LookVector * 6) + Vector3.new(0, 3, 0)
+                moveTo(pos, hrpHorse.Position)
+            else
+                stopMovement()
+                herdCount += 1
+                pcall(function()
+                    Rayfield:Notify({
+                        Title = "🐎 Herd Alcançado!",
+                        Content = "Raça: " .. (breedText or "?"),
+                        Duration = 3
+                    })
+                end)
+                task.wait(2)
+            end
+        else
+            currentTarget = "Sem Herds"
+        end
+    end
+end)
+
+-- 2. AUTO CAVALOS NORMAIS (v25.0 - com Auto Hop)
+task.spawn(function()
+    print("🐎 Loop Cavalos iniciado")
+    while true do
+        task.wait(0.3)
+
+        -- Se desligou, limpa tudo
+        if not farmingNormalHorses then
+            if horsePriorityActive then
+                resetPriority()
+                resumeOtherFarms()
+            end
+            continue
+        end
+
+        if not HRP or not HRP.Parent then continue end
+
+        local currentIsland = getCurrentIsland()
+        if not currentIsland then
+            currentTarget = "Sem ilha!"
+            continue
+        end
+
+        -- SE JÁ ESTÁ PERSEGUINDO UM CAVALO
+        if currentHorseTarget then
+            local state = checkHorseState(currentHorseTarget)
+
+            if state == "gone" then
+                pcall(function()
+                    Rayfield:Notify({Title = "✅ Cavalo Capturado!", Content = "Retomando farms...", Duration = 3})
+                end)
+                resetPriority()
+                resumeOtherFarms()
+                continue
+            end
+
+            if state == "mine" then
+                pcall(function()
+                    Rayfield:Notify({Title = "✅ Cavalo Seu!", Content = "Retomando farms...", Duration = 2})
+                end)
+                resetPriority()
+                resumeOtherFarms()
+                continue
+            end
+
+            if state == "tamed" then
+                pcall(function()
+                    Rayfield:Notify({Title = "⚠️ Cavalo Perdido", Content = "Retomando farms...", Duration = 2})
+                end)
+                resetPriority()
+                resumeOtherFarms()
+                continue
+            end
+
+            if state == "wild" then
+                local hrpHorse = currentHorseTarget:FindFirstChild("HumanoidRootPart")
+                if hrpHorse then
+                    local distToHorse = dist(hrpHorse, HRP)
+                    currentTarget = "🐎 SEGUINDO: " .. (getHorseLabels(currentHorseTarget) or "?") .. " [" .. math.floor(distToHorse) .. " studs]"
+
+                    if distToHorse > 8 then
+                        local pos = hrpHorse.Position - (hrpHorse.CFrame.LookVector * 5) + Vector3.new(0, 3, 0)
+                        moveTo(pos, hrpHorse.Position)
+                    else
+                        stopMovement()
+                        currentTarget = "🐎 ESPERANDO CAPTURA..."
+                    end
+                else
+                    pcall(function()
+                        Rayfield:Notify({Title = "✅ Cavalo Capturado!", Content = "Retomando farms...", Duration = 2})
+                    end)
+                    resetPriority()
+                    resumeOtherFarms()
+                end
+                continue
+            end
+        end
+
+        -- PROCURA NOVO CAVALO
+        local target, minDist = nil, math.huge
+        local horseCount = 0
+
+        for _, m in ipairs(currentIsland:GetDescendants()) do
+            if isWildHorse(m) then
+                horseCount += 1
+                if selectedBreed ~= "Qualquer" then
+                    local pureBreed = getHorseBreedForFilter(m)
+                    if string.lower(pureBreed) ~= string.lower(selectedBreed) then
+                        continue
+                    end
+                end
+
+                if ignoreTamedHorses then
+                    local isTamed, _ = isHorseTamed(m)
+                    if isTamed then continue end
+                end
+
+                local hrpHorse = m:FindFirstChild("HumanoidRootPart")
+                if hrpHorse then
+                    local hasPlayer, _ = isPlayerNear(hrpHorse.Position, 40)
+                    if not hasPlayer then
+                        local d = dist(hrpHorse, HRP)
+                        if d < minDist then
+                            minDist = d
+                            target = m
+                        end
+                    else
+                        skippedByPlayer += 1
+                    end
+                end
+            end
+        end
+
+        -- 🆕 AUTO HOP: Se não achou cavalo por muito tempo
+        if not target then
+            local timeSinceLastHorse = os.clock() - lastHorseFoundTime
+
+            -- 🆕 Se tem cavalos na ilha mas nenhum válido (todos domados/filtrados)
+            if horseCount > 0 then
+                lastHorseFoundTime = os.clock()  -- Reset, tem cavalos mas não válidos
+            end
+
+            -- Se não tem cavalos e auto hop ligado
+            if horseCount == 0 and autoHopNoHorses and timeSinceLastHorse > NO_HORSE_TIMEOUT then
+                pcall(function()
+                    Rayfield:Notify({
+                        Title = "🚀 Auto Hop Ativado",
+                        Content = "Nenhum cavalo por " .. NO_HORSE_TIMEOUT .. "s. Trocando servidor...",
+                        Duration = 5
+                    })
+                end)
+                task.wait(2)
+                serverHop()
+                continue
+            end
+
+            currentTarget = "Procurando cavalos... (" .. math.floor(timeSinceLastHorse) .. "s)"
+        else
+            -- Achou cavalo! Reseta timer
+            lastHorseFoundTime = os.clock()
+
+            -- ENCONTROU CAVALO! Ativa prioridade
+            currentHorseTarget = target
+            horsePriorityActive = true
+            pauseOtherFarms()
+
+            local breedText, _ = getHorseLabels(target)
+            currentTarget = "🐎 NOVO ALVO: " .. (breedText or "?")
+
+            pcall(function()
+                Rayfield:Notify({
+                    Title = "🐎 Prioridade Ativada",
+                    Content = "Cavalo encontrado! Indo capturar...",
+                    Duration = 2
+                })
+            end)
+
+            local hrpHorse = target.HumanoidRootPart
+            local pos = hrpHorse.Position - (hrpHorse.CFrame.LookVector * 5) + Vector3.new(0, 3, 0)
+            moveTo(pos, hrpHorse.Position)
+        end
+    end
+end)
+
+-- 3. AUTO COLETOR
+task.spawn(function()
+    print("🧺 Loop Coletor iniciado")
+    while true do
+        task.wait(0.4)
+        if not farmingCollector or not HRP or not HRP.Parent then continue end
+
+        if horsePriorityActive then
+            currentTarget = "⏸️ Coletor (Cavalo em prioridade)"
+            continue
+        end
+
+        local best, bestDist, bestType = nil, math.huge, nil
+
+        local islands = Workspace:FindFirstChild("Islands")
+        if not islands then
+            currentTarget = "Sem Islands!"
+            continue
+        end
+
+        for _, island in ipairs(islands:GetChildren()) do
+            for _, model in ipairs(island:GetChildren()) do
+                if model:IsA("Model") and string.find(model.Name, "{") then
+                    if isWildHorse(model) or isHerd(model) then continue end
+
+                    local itemType, targetPart = getCollectibleInfo(model)
+
+                    if itemType and targetPart and targetPart.Parent then
+                        local hasPlayer, _ = isPlayerNear(targetPart.Position, 20)
+                        if not hasPlayer then
+                            local d = dist(targetPart, HRP)
+                            if d < bestDist then
+                                bestDist = d
+                                best = targetPart
+                                bestType = itemType
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if best and farmingCollector then
+            currentTarget = "Coletar: " .. (bestType or "?") .. " | " .. best.Name
+            local distToItem = dist(best, HRP)
+
+            if distToItem > 5 then
+                local tw = moveTo(best.Position + Vector3.new(0, 2, 0))
+                if tw then tw.Completed:Wait() end
+                task.wait(0.3)
+            else
+                for i = 1, 3 do
+                    pressE()
+                    task.wait(0.1)
+                end
+                collectorCount += 1
+                task.wait(0.3)
+            end
+        else
+            currentTarget = "Sem coletáveis"
+        end
+    end
+end)
+
+-- 4. SNOWBALL
+task.spawn(function()
+    print("❄️ Loop Snowball iniciado")
+    while true do
+        task.wait(0.5)
+        if not farmingSnowballs or not HRP or not HRP.Parent then continue end
+
+        if horsePriorityActive then
+            currentTarget = "⏸️ Snowball (Cavalo em prioridade)"
+            continue
+        end
+
+        local target, minDist = nil, math.huge
+
+        local islands = Workspace:FindFirstChild("Islands")
+        if islands then
+            for _, island in ipairs(islands:GetChildren()) do
+                for _, m in ipairs(island:GetDescendants()) do
+                    local isSnow, part = isSnowballModel(m)
+                    if isSnow and part and part:IsA("BasePart") then
+                        local hasPlayer, _ = isPlayerNear(part.Position, 15)
+                        if not hasPlayer then
+                            local d = dist(part, HRP)
+                            if d < minDist then
+                                minDist = d
+                                target = part
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if not target then
+            for _, m in ipairs(Workspace:GetDescendants()) do
+                if m:IsA("BasePart") or m:IsA("MeshPart") then
+                    if string.find(string.lower(m.Name), "snowball") then
+                        local hasPlayer, _ = isPlayerNear(m.Position, 15)
+                        if not hasPlayer then
+                            local d = dist(m, HRP)
+                            if d < minDist then
+                                minDist = d
+                                target = m
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if target then
+            currentTarget = "Snowball"
+            local distToSnow = dist(target, HRP)
+            if distToSnow > 4 then
+                moveTo(target.Position + Vector3.new(0, 2, 0))
+                task.wait(0.3)
+            else
+                snowballCount += 1
+                task.wait(0.5)
+            end
+        else
+            currentTarget = "Sem snowballs"
+        end
+    end
+end)
+
+-- 5. PEDRAS
+task.spawn(function()
+    print("⛏️ Loop Pedras iniciado")
+    while true do
+        task.wait(1.2)
+        if not farmingRocks or not HRP or not HRP.Parent then continue end
+
+        if horsePriorityActive then
+            currentTarget = "⏸️ Pedras (Cavalo em prioridade)"
+            continue
+        end
+
+        local target, minDist = nil, math.huge
+
+        local islands = Workspace:FindFirstChild("Islands")
+        if islands then
+            for _, island in ipairs(islands:GetChildren()) do
+                for _, m in ipairs(island:GetDescendants()) do
+                    local isRock, part = isRockModel(m)
+                    if isRock and part and part:IsA("BasePart") and part.Parent then
+                        local hasPlayer, _ = isPlayerNear(part.Position, 20)
+                        if not hasPlayer then
+                            local d = dist(part, HRP)
+                            if d < minDist then
+                                minDist = d
+                                target = part
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if target then
+            currentTarget = "Pedra: " .. target.Name .. (onlyOreRocks and " [MINÉRIO]" or "")
+            local distToRock = dist(target, HRP)
+
+            if distToRock > 5 then
+                moveTo(target.Position + Vector3.new(0, 3, 0))
+                task.wait(0.3)
+            else
+                activateTool()
+                task.wait(0.3)
+                if not target.Parent then
+                    rockCount += 1
+                end
+            end
+        else
+            currentTarget = "Sem pedras"
+        end
+    end
+end)
+
+--------------------------------------------------
+-- 🆕 CARREGA CONFIGURAÇÃO SALVA
+--------------------------------------------------
+local configLoaded = loadConfig()
+
+--------------------------------------------------
+-- UI - FARM
+--------------------------------------------------
+
+FarmTab:CreateToggle({
+    Name = "🐎 Auto Herds",
+    CurrentValue = configLoaded and savedConfig.farmingHerds or false,
+    Callback = function(v)
+        farmingHerds = v
+        saveConfig()
+        print("🐎 Herds:", v and "LIGADO" or "DESLIGADO")
+        if not v then stopMovement() end
+    end
+})
+
+FarmTab:CreateToggle({
+    Name = "🐎 Auto Cavalos (PRIORIDADE)",
+    CurrentValue = configLoaded and savedConfig.farmingNormalHorses or false,
+    Callback = function(v)
+        farmingNormalHorses = v
+        saveConfig()
+        print("🐎 Cavalos:", v and "LIGADO" or "DESLIGADO")
+        if not v then 
+            stopMovement()
+            resetPriority()
+            resumeOtherFarms()
+        end
+    end
+})
+
+FarmTab:CreateToggle({
+    Name = "🧺 Auto Coletor",
+    CurrentValue = configLoaded and savedConfig.farmingCollector or false,
+    Callback = function(v)
+        farmingCollector = v
+        saveConfig()
+        print("🧺 Coletor:", v and "LIGADO" or "DESLIGADO")
+        if not v then stopMovement() end
+    end
+})
+
+FarmTab:CreateToggle({
+    Name = "❄️ Auto Snowballs",
+    CurrentValue = configLoaded and savedConfig.farmingSnowballs or false,
+    Callback = function(v)
+        farmingSnowballs = v
+        saveConfig()
+        print("❄️ Snowballs:", v and "LIGADO" or "DESLIGADO")
+        if not v then stopMovement() end
+    end
+})
+
+FarmTab:CreateToggle({
+    Name = "⛏️ Auto Pedras",
+    CurrentValue = configLoaded and savedConfig.farmingRocks or false,
+    Callback = function(v)
+        farmingRocks = v
+        saveConfig()
+        print("⛏️ Pedras:", v and "LIGADO" or "DESLIGADO")
+        if not v then stopMovement() end
+    end
+})
+
+FarmTab:CreateButton({
+    Name = "🏠 Ir para Meu Cavalo",
+    Callback = function()
+        stopMovement()
+        if not HRP or not HRP.Parent then
+            pcall(function()
+                Rayfield:Notify({Title = "Erro", Content = "Personagem não carregado!", Duration = 3})
+            end)
+            return
+        end
+
+        local myHorse = nil
+        for _, m in ipairs(Workspace:GetDescendants()) do
+            if m:IsA("Model") and m:FindFirstChild("HumanoidRootPart") then
+                if isMyHorse(m) then
+                    myHorse = m
+                    break
+                end
+            end
+        end
+
+        if myHorse then
+            moveTo(myHorse.HumanoidRootPart.Position + Vector3.new(0, 4, 0))
+            local breedText, _ = getHorseLabels(myHorse)
+            pcall(function()
+                Rayfield:Notify({
+                    Title = "🏠 Meu Cavalo",
+                    Content = "Teleportando para: " .. (breedText or "Cavalo"),
+                    Duration = 2
+                })
+            end)
+        else
+            pcall(function()
+                Rayfield:Notify({
+                    Title = "🏠 Erro",
+                    Content = "Nenhum cavalo seu encontrado!",
+                    Duration = 3
+                })
+            end)
+        end
+    end
+})
+
+-- SLIDER VELOCIDADE
+FarmTab:CreateSlider({
+    Name = "⚡ Velocidade (Max 100)",
+    Range = {50, 100},
+    Increment = 5,
+    Suffix = "studs/s",
+    CurrentValue = configLoaded and savedConfig.tweenSpeed or 100,
+    Callback = function(v)
+        tweenSpeed = v
+        saveConfig()
+    end
+})
+
+--------------------------------------------------
+-- UI - SERVIDOR
+--------------------------------------------------
+FarmTab:CreateSection("🌐 Servidor")
+
+FarmTab:CreateButton({
+    Name = "🚀 Server Hop (Mudar Agora)",
+    Callback = function()
+        pcall(function()
+            Rayfield:Notify({Title = "🚀 Server Hop", Content = "Trocando de servidor...", Duration = 3})
+        end)
+        serverHop()
+    end
+})
+
+FarmTab:CreateToggle({
+    Name = "🔄 Auto Rejoin (se cair)",
+    CurrentValue = configLoaded and savedConfig.autoRejoin or true,
+    Callback = function(v)
+        autoRejoin = v
+        saveConfig()
+        print("🔄 Auto Rejoin:", v and "LIGADO" or "DESLIGADO")
+    end
+})
+
+-- 🆕 AUTO HOP SEM CAVALOS
+FarmTab:CreateToggle({
+    Name = "🔄 Auto Hop se Sem Cavalos (15s)",
+    CurrentValue = configLoaded and savedConfig.autoHopNoHorses or false,
+    Callback = function(v)
+        autoHopNoHorses = v
+        saveConfig()
+        print("🔄 Auto Hop:", v and "LIGADO" or "DESLIGADO")
+    end
+})
+
+--------------------------------------------------
+-- UI - SETTINGS
+--------------------------------------------------
+SettingsTab:CreateSection("🚫 Excluir Coletáveis")
+
+SettingsTab:CreateToggle({
+    Name = "🌾 Algodão",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.algodao or false,
+    Callback = function(v) 
+        excludeItems.algodao = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "🌾 Trigo",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.trigo or false,
+    Callback = function(v) 
+        excludeItems.trigo = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "🌽 Milho",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.milho or false,
+    Callback = function(v) 
+        excludeItems.milho = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "🌳 Bush",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.bush or false,
+    Callback = function(v) 
+        excludeItems.bush = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "🌸 Flor",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.flor or false,
+    Callback = function(v) 
+        excludeItems.flor = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "🫐 Berry",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.berry or false,
+    Callback = function(v) 
+        excludeItems.berry = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "🥥 Coco",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.coco or false,
+    Callback = function(v) 
+        excludeItems.coco = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "⚪ Pérola",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.perola or false,
+    Callback = function(v) 
+        excludeItems.perola = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "🐚 Concha",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.concha or false,
+    Callback = function(v) 
+        excludeItems.concha = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "📦 Itens Genéricos (Bounds)",
+    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.item or false,
+    Callback = function(v) 
+        excludeItems.item = v 
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateSection("⛏️ Config Pedras")
+
+SettingsTab:CreateToggle({
+    Name = "💎 Só Minérios (Rocks puro)",
+    CurrentValue = configLoaded and savedConfig.onlyOreRocks or false,
+    Callback = function(v)
+        onlyOreRocks = v
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "🚫 Ignorar Domados",
+    CurrentValue = configLoaded and savedConfig.ignoreTamedHorses or true,
+    Callback = function(v)
+        ignoreTamedHorses = v
+        saveConfig()
+    end
+})
+
+SettingsTab:CreateDropdown({
+    Name = "🐴 Filtro de Raça",
+    Options = {
+        "Qualquer", "Thoroughbred", "Standardbred", "Standard Donkey",
+        "Shire", "Quarter Horse", "Paint Horse", "Percheron",
+        "Mustang", "Mammoth Donkey", "Marwari", "Icelandic",
+        "Fjord", "Friesian", "Dutch Warmblood", "Clydesdale",
+        "Connemara", "Akhal-Teke", "Andalusian", "Appaloosa", "Arabian"
+    },
+    CurrentOption = configLoaded and savedConfig.selectedBreed or "Qualquer",
+    Callback = function(option)
+        local val = type(option) == "table" and (option[1] or option.CurrentOption) or option
+        selectedBreed = tostring(val)
+        saveConfig()
+    end
+})
+
+--------------------------------------------------
+-- UI - STATUS
+--------------------------------------------------
+local statusLabel = StatusTab:CreateLabel("⏳ Status: Aguardando")
+local targetLabel = StatusTab:CreateLabel("🎯 Alvo: Nenhum")
+local speedLabel = StatusTab:CreateLabel("⚡ Velocidade: 100 studs/s")
+local islandLabel = StatusTab:CreateLabel("🏝️ Ilha: ???")
+local priorityLabel = StatusTab:CreateLabel("🐎 Prioridade: Inativa")
+local pausedLabel = StatusTab:CreateLabel("⏸️ Pausados: Nenhum")
+local hopLabel = StatusTab:CreateLabel("🔄 Auto Hop: Desligado")
+
+local herdStats = StatusTab:CreateLabel("🐎 Herds: 0")
+local collectStats = StatusTab:CreateLabel("🧺 Coletados: 0")
+local rockStats = StatusTab:CreateLabel("⛏️ Pedras: 0")
+local snowStats = StatusTab:CreateLabel("❄️ Snowballs: 0")
+local skipStats = StatusTab:CreateLabel("⚠️ Pulados: 0")
+local timeLabel = StatusTab:CreateLabel("⏱️ 0s")
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        local island = getCurrentIsland()
+
+        statusLabel:Set("⏳ " .. (farmingHerds and "🟢HERDS " or "")
+            .. (farmingNormalHorses and "🟢CAVALOS " or "")
+            .. (farmingCollector and "🟢COLETOR " or "")
+            .. (farmingRocks and "🟢PEDRAS " or "")
+            .. (farmingSnowballs and "🟢SNOW " or "")
+            .. (not farmingHerds and not farmingNormalHorses and not farmingCollector 
+                and not farmingRocks and not farmingSnowballs and "🔴PARADO" or ""))
+
+        targetLabel:Set("🎯 " .. currentTarget)
+        speedLabel:Set("⚡ " .. tweenSpeed .. " studs/s")
+        islandLabel:Set("🏝️ " .. (island and island.Name or "???"))
+        priorityLabel:Set("🐎 Prioridade: " .. (horsePriorityActive and "🔴ATIVA" or "🟢Inativa"))
+
+        local pausedText = ""
+        if pausedCollector then pausedText = pausedText .. "Coletor " end
+        if pausedRocks then pausedText = pausedText .. "Pedras " end
+        if pausedSnowballs then pausedText = pausedText .. "Snowballs " end
+        pausedLabel:Set("⏸️ Pausados: " .. (pausedText ~= "" and pausedText or "Nenhum"))
+
+        hopLabel:Set("🔄 Auto Hop: " .. (autoHopNoHorses and "🟢LIGADO (15s)" or "🔴DESLIGADO"))
+
+        herdStats:Set("🐎 Herds: " .. herdCount)
+        collectStats:Set("🧺 Coletados: " .. collectorCount)
+        rockStats:Set("⛏️ Pedras: " .. rockCount)
+        snowStats:Set("❄️ Snowballs: " .. snowballCount)
+        skipStats:Set("⚠️ Pulados: " .. skippedByPlayer)
+        timeLabel:Set("⏱️ " .. math.floor(os.clock() - startTime) .. "s")
+    end
+end)
+
+print("✅ [v25.0] Script carregado com Save e Auto Hop!")
+
+end)
+
+if not success then
+    print("❌ ERRO CRÍTICO:", err)
+    pcall(function()
+        local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+        Rayfield:Notify({
+            Title = "❌ Erro no Script",
+            Content = tostring(err):sub(1, 100),
+            Duration = 10
+        })
+    end)
+end
