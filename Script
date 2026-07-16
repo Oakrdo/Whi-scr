@@ -1,20 +1,31 @@
--- 🐎🌱⛏️❄️ Auto Farm PRO MAX - v25.0
--- NOVO: Save de Configurações | Auto Server Hop quando ilha sem cavalos
+-- 🐎🌱⛏️❄️ Auto Farm PRO MAX - v24.7
+-- FIX: Guarda estado de TODOS os farms separadamente | Retoma corretamente após múltiplos cavalos
 
-print("🔧 [v25.0] Iniciando script com Save e Auto Hop...")
+print("🔧 [v24.7] Iniciando script...")
 
 local success, err = pcall(function()
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 print("✅ Rayfield carregado")
 
--- 🆕 SERVIÇOS ADICIONAIS
-local HttpService = game:GetService("HttpService")
+local Window = Rayfield:CreateWindow({
+    Name = "🐎 Auto Farm PRO MAX v24.7",
+    LoadingTitle = "Carregando v24.7...",
+    ConfigurationSaving = {Enabled = false}
+})
+
+local FarmTab = Window:CreateTab("Farm", 4483362458)
+local StatusTab = Window:CreateTab("Status", 4483362458)
+local SettingsTab = Window:CreateTab("Config", 4483362458)
+
+print("✅ UI criada")
+
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local Workspace = game:GetService("Workspace")
 local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 
 local Player = Players.LocalPlayer
 local Character = Player.Character or Player.CharacterAdded:Wait()
@@ -28,80 +39,14 @@ local PLAYER_NAME = Player.Name
 local activeTween = nil
 local tweenSpeed = 100
 
---------------------------------------------------
--- 🆕 SISTEMA DE SAVE/LOAD DE CONFIGURAÇÕES
---------------------------------------------------
-local CONFIG_FILE = "AutoFarm_PROMAX_Config.json"
-local savedConfig = {}
-
-local function loadConfig()
-    local success, result = pcall(function()
-        if isfile(CONFIG_FILE) then
-            local content = readfile(CONFIG_FILE)
-            return HttpService:JSONDecode(content)
-        end
-        return nil
-    end)
-    if success and result then
-        savedConfig = result
-        print("📂 Config carregada:", CONFIG_FILE)
-        return true
-    else
-        savedConfig = {}
-        print("📂 Nenhuma config salva, usando padrão")
-        return false
-    end
-end
-
-local function saveConfig()
-    local config = {
-        -- Farms ativos
-        farmingHerds = farmingHerds,
-        farmingNormalHorses = farmingNormalHorses,
-        farmingCollector = farmingCollector,
-        farmingRocks = farmingRocks,
-        farmingSnowballs = farmingSnowballs,
-
-        -- Configurações
-        selectedBreed = selectedBreed,
-        ignoreTamedHorses = ignoreTamedHorses,
-        onlyOreRocks = onlyOreRocks,
-        tweenSpeed = tweenSpeed,
-        autoRejoin = autoRejoin,
-        autoHopNoHorses = autoHopNoHorses,
-
-        -- Filtros de coletáveis
-        excludeItems = excludeItems,
-
-        -- Versão
-        version = "v25.0"
-    }
-    pcall(function()
-        writefile(CONFIG_FILE, HttpService:JSONEncode(config))
-        print("💾 Config salva!")
-    end)
-end
-
--- 🆕 Auto-save a cada 30 segundos
-task.spawn(function()
-    while true do
-        task.wait(30)
-        saveConfig()
-    end
-end)
-
--- ESTADOS
+-- ESTADOS ATIVOS (o que o usuário LIGOU)
 local farmingHerds = false
 local farmingNormalHorses = false
 local farmingCollector = false
 local farmingRocks = false
 local farmingSnowballs = false
-local autoRejoin = true
-local autoHopNoHorses = false  -- 🆕 NOVO: Auto hop quando sem cavalos
-local selectedBreed = "Qualquer"
-local ignoreTamedHorses = true
 
--- ESTADOS PAUSADOS
+-- 🆕 ESTADOS PAUSADOS (guarda o que estava ativo ANTES da prioridade, separadamente)
 local pausedCollector = false
 local pausedRocks = false
 local pausedSnowballs = false
@@ -109,6 +54,11 @@ local pausedSnowballs = false
 -- SISTEMA DE PRIORIDADE
 local horsePriorityActive = false
 local currentHorseTarget = nil
+
+-- OUTROS ESTADOS
+local autoRejoin = true
+local selectedBreed = "Qualquer"
+local ignoreTamedHorses = true
 
 -- FILTROS
 local excludeItems = {
@@ -128,10 +78,6 @@ local snowballCount = 0
 local skippedByPlayer = 0
 local currentTarget = "Nenhum"
 
--- 🆕 CONTADOR DE TEMPO SEM CAVALOS (para auto hop)
-local lastHorseFoundTime = os.clock()
-local NO_HORSE_TIMEOUT = 15  -- segundos sem cavalo antes do hop
-
 --------------------------------------------------
 -- SISTEMA DE SERVIDOR
 --------------------------------------------------
@@ -145,9 +91,6 @@ local function serverHop()
         end
     end
     if #servers > 0 then
-        pcall(function()
-            Rayfield:Notify({Title = "🚀 Server Hop", Content = "Trocando de servidor...", Duration = 3})
-        end)
         TeleportService:TeleportToPlaceInstance(game.PlaceId, servers[math.random(1, #servers)])
     else
         pcall(function()
@@ -374,9 +317,10 @@ local function checkHorseState(horse)
 end
 
 --------------------------------------------------
--- SISTEMA DE PRIORIDADE
+-- 🆕 SISTEMA DE PRIORIDADE (v24.7 - Guarda TODOS os farms)
 --------------------------------------------------
 local function pauseOtherFarms()
+    -- Guarda o estado ATUAL de cada farm separadamente
     if farmingCollector then
         pausedCollector = true
         farmingCollector = false
@@ -395,6 +339,7 @@ local function pauseOtherFarms()
 end
 
 local function resumeOtherFarms()
+    -- Retoma TODOS os farms que estavam ativos
     if pausedCollector then
         farmingCollector = true
         pausedCollector = false
@@ -585,7 +530,7 @@ task.spawn(function()
     end
 end)
 
--- 2. AUTO CAVALOS NORMAIS (v25.0 - com Auto Hop)
+-- 2. AUTO CAVALOS NORMAIS (v24.7 FIX)
 task.spawn(function()
     print("🐎 Loop Cavalos iniciado")
     while true do
@@ -612,33 +557,49 @@ task.spawn(function()
         if currentHorseTarget then
             local state = checkHorseState(currentHorseTarget)
 
+            -- CAVALO SUMIU (capturado!)
             if state == "gone" then
                 pcall(function()
-                    Rayfield:Notify({Title = "✅ Cavalo Capturado!", Content = "Retomando farms...", Duration = 3})
+                    Rayfield:Notify({
+                        Title = "✅ Cavalo Capturado!",
+                        Content = "Retomando todos os farms...",
+                        Duration = 3
+                    })
                 end)
                 resetPriority()
                 resumeOtherFarms()
                 continue
             end
 
+            -- CAVALO VIROU MEU
             if state == "mine" then
                 pcall(function()
-                    Rayfield:Notify({Title = "✅ Cavalo Seu!", Content = "Retomando farms...", Duration = 2})
+                    Rayfield:Notify({
+                        Title = "✅ Cavalo Seu!",
+                        Content = "Retomando todos os farms...",
+                        Duration = 2
+                    })
                 end)
                 resetPriority()
                 resumeOtherFarms()
                 continue
             end
 
+            -- CAVALO DOMADO POR OUTRO
             if state == "tamed" then
                 pcall(function()
-                    Rayfield:Notify({Title = "⚠️ Cavalo Perdido", Content = "Retomando farms...", Duration = 2})
+                    Rayfield:Notify({
+                        Title = "⚠️ Cavalo Perdido",
+                        Content = "Retomando todos os farms...",
+                        Duration = 2
+                    })
                 end)
                 resetPriority()
                 resumeOtherFarms()
                 continue
             end
 
+            -- AINDA SELVAGEM, CONTINUA SEGUINDO
             if state == "wild" then
                 local hrpHorse = currentHorseTarget:FindFirstChild("HumanoidRootPart")
                 if hrpHorse then
@@ -649,12 +610,18 @@ task.spawn(function()
                         local pos = hrpHorse.Position - (hrpHorse.CFrame.LookVector * 5) + Vector3.new(0, 3, 0)
                         moveTo(pos, hrpHorse.Position)
                     else
+                        -- Chegou perto, para e espera
                         stopMovement()
                         currentTarget = "🐎 ESPERANDO CAPTURA..."
                     end
                 else
+                    -- HRP sumiu, cavalo capturado
                     pcall(function()
-                        Rayfield:Notify({Title = "✅ Cavalo Capturado!", Content = "Retomando farms...", Duration = 2})
+                        Rayfield:Notify({
+                            Title = "✅ Cavalo Capturado!",
+                            Content = "Retomando todos os farms...",
+                            Duration = 2
+                        })
                     end)
                     resetPriority()
                     resumeOtherFarms()
@@ -663,13 +630,11 @@ task.spawn(function()
             end
         end
 
-        -- PROCURA NOVO CAVALO
+        -- PROCURA NOVO CAVALO (só se não estiver perseguindo)
         local target, minDist = nil, math.huge
-        local horseCount = 0
 
         for _, m in ipairs(currentIsland:GetDescendants()) do
             if isWildHorse(m) then
-                horseCount += 1
                 if selectedBreed ~= "Qualquer" then
                     local pureBreed = getHorseBreedForFilter(m)
                     if string.lower(pureBreed) ~= string.lower(selectedBreed) then
@@ -698,34 +663,7 @@ task.spawn(function()
             end
         end
 
-        -- 🆕 AUTO HOP: Se não achou cavalo por muito tempo
-        if not target then
-            local timeSinceLastHorse = os.clock() - lastHorseFoundTime
-
-            -- 🆕 Se tem cavalos na ilha mas nenhum válido (todos domados/filtrados)
-            if horseCount > 0 then
-                lastHorseFoundTime = os.clock()  -- Reset, tem cavalos mas não válidos
-            end
-
-            -- Se não tem cavalos e auto hop ligado
-            if horseCount == 0 and autoHopNoHorses and timeSinceLastHorse > NO_HORSE_TIMEOUT then
-                pcall(function()
-                    Rayfield:Notify({
-                        Title = "🚀 Auto Hop Ativado",
-                        Content = "Nenhum cavalo por " .. NO_HORSE_TIMEOUT .. "s. Trocando servidor...",
-                        Duration = 5
-                    })
-                end)
-                task.wait(2)
-                serverHop()
-                continue
-            end
-
-            currentTarget = "Procurando cavalos... (" .. math.floor(timeSinceLastHorse) .. "s)"
-        else
-            -- Achou cavalo! Reseta timer
-            lastHorseFoundTime = os.clock()
-
+        if target then
             -- ENCONTROU CAVALO! Ativa prioridade
             currentHorseTarget = target
             horsePriorityActive = true
@@ -742,9 +680,12 @@ task.spawn(function()
                 })
             end)
 
+            -- Vai até o cavalo IMEDIATAMENTE
             local hrpHorse = target.HumanoidRootPart
             local pos = hrpHorse.Position - (hrpHorse.CFrame.LookVector * 5) + Vector3.new(0, 3, 0)
             moveTo(pos, hrpHorse.Position)
+        else
+            currentTarget = "Procurando cavalos..."
         end
     end
 end)
@@ -933,20 +874,14 @@ task.spawn(function()
 end)
 
 --------------------------------------------------
--- 🆕 CARREGA CONFIGURAÇÃO SALVA
---------------------------------------------------
-local configLoaded = loadConfig()
-
---------------------------------------------------
 -- UI - FARM
 --------------------------------------------------
 
 FarmTab:CreateToggle({
     Name = "🐎 Auto Herds",
-    CurrentValue = configLoaded and savedConfig.farmingHerds or false,
+    CurrentValue = false,
     Callback = function(v)
         farmingHerds = v
-        saveConfig()
         print("🐎 Herds:", v and "LIGADO" or "DESLIGADO")
         if not v then stopMovement() end
     end
@@ -954,10 +889,9 @@ FarmTab:CreateToggle({
 
 FarmTab:CreateToggle({
     Name = "🐎 Auto Cavalos (PRIORIDADE)",
-    CurrentValue = configLoaded and savedConfig.farmingNormalHorses or false,
+    CurrentValue = false,
     Callback = function(v)
         farmingNormalHorses = v
-        saveConfig()
         print("🐎 Cavalos:", v and "LIGADO" or "DESLIGADO")
         if not v then 
             stopMovement()
@@ -969,10 +903,9 @@ FarmTab:CreateToggle({
 
 FarmTab:CreateToggle({
     Name = "🧺 Auto Coletor",
-    CurrentValue = configLoaded and savedConfig.farmingCollector or false,
+    CurrentValue = false,
     Callback = function(v)
         farmingCollector = v
-        saveConfig()
         print("🧺 Coletor:", v and "LIGADO" or "DESLIGADO")
         if not v then stopMovement() end
     end
@@ -980,10 +913,9 @@ FarmTab:CreateToggle({
 
 FarmTab:CreateToggle({
     Name = "❄️ Auto Snowballs",
-    CurrentValue = configLoaded and savedConfig.farmingSnowballs or false,
+    CurrentValue = false,
     Callback = function(v)
         farmingSnowballs = v
-        saveConfig()
         print("❄️ Snowballs:", v and "LIGADO" or "DESLIGADO")
         if not v then stopMovement() end
     end
@@ -991,10 +923,9 @@ FarmTab:CreateToggle({
 
 FarmTab:CreateToggle({
     Name = "⛏️ Auto Pedras",
-    CurrentValue = configLoaded and savedConfig.farmingRocks or false,
+    CurrentValue = false,
     Callback = function(v)
         farmingRocks = v
-        saveConfig()
         print("⛏️ Pedras:", v and "LIGADO" or "DESLIGADO")
         if not v then stopMovement() end
     end
@@ -1049,10 +980,9 @@ FarmTab:CreateSlider({
     Range = {50, 100},
     Increment = 5,
     Suffix = "studs/s",
-    CurrentValue = configLoaded and savedConfig.tweenSpeed or 100,
+    CurrentValue = 100,
     Callback = function(v)
         tweenSpeed = v
-        saveConfig()
     end
 })
 
@@ -1062,10 +992,10 @@ FarmTab:CreateSlider({
 FarmTab:CreateSection("🌐 Servidor")
 
 FarmTab:CreateButton({
-    Name = "🚀 Server Hop (Mudar Agora)",
+    Name = "🚀 Server Hop (Mudar Servidor)",
     Callback = function()
         pcall(function()
-            Rayfield:Notify({Title = "🚀 Server Hop", Content = "Trocando de servidor...", Duration = 3})
+            Rayfield:Notify({Title = "🚀 Server Hop", Content = "Procurando servidor...", Duration = 3})
         end)
         serverHop()
     end
@@ -1073,22 +1003,10 @@ FarmTab:CreateButton({
 
 FarmTab:CreateToggle({
     Name = "🔄 Auto Rejoin (se cair)",
-    CurrentValue = configLoaded and savedConfig.autoRejoin or true,
+    CurrentValue = true,
     Callback = function(v)
         autoRejoin = v
-        saveConfig()
         print("🔄 Auto Rejoin:", v and "LIGADO" or "DESLIGADO")
-    end
-})
-
--- 🆕 AUTO HOP SEM CAVALOS
-FarmTab:CreateToggle({
-    Name = "🔄 Auto Hop se Sem Cavalos (15s)",
-    CurrentValue = configLoaded and savedConfig.autoHopNoHorses or false,
-    Callback = function(v)
-        autoHopNoHorses = v
-        saveConfig()
-        print("🔄 Auto Hop:", v and "LIGADO" or "DESLIGADO")
     end
 })
 
@@ -1099,111 +1017,79 @@ SettingsTab:CreateSection("🚫 Excluir Coletáveis")
 
 SettingsTab:CreateToggle({
     Name = "🌾 Algodão",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.algodao or false,
-    Callback = function(v) 
-        excludeItems.algodao = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.algodao = v end
 })
 
 SettingsTab:CreateToggle({
     Name = "🌾 Trigo",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.trigo or false,
-    Callback = function(v) 
-        excludeItems.trigo = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.trigo = v end
 })
 
 SettingsTab:CreateToggle({
     Name = "🌽 Milho",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.milho or false,
-    Callback = function(v) 
-        excludeItems.milho = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.milho = v end
 })
 
 SettingsTab:CreateToggle({
     Name = "🌳 Bush",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.bush or false,
-    Callback = function(v) 
-        excludeItems.bush = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.bush = v end
 })
 
 SettingsTab:CreateToggle({
     Name = "🌸 Flor",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.flor or false,
-    Callback = function(v) 
-        excludeItems.flor = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.flor = v end
 })
 
 SettingsTab:CreateToggle({
     Name = "🫐 Berry",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.berry or false,
-    Callback = function(v) 
-        excludeItems.berry = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.berry = v end
 })
 
 SettingsTab:CreateToggle({
     Name = "🥥 Coco",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.coco or false,
-    Callback = function(v) 
-        excludeItems.coco = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.coco = v end
 })
 
 SettingsTab:CreateToggle({
     Name = "⚪ Pérola",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.perola or false,
-    Callback = function(v) 
-        excludeItems.perola = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.perola = v end
 })
 
 SettingsTab:CreateToggle({
     Name = "🐚 Concha",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.concha or false,
-    Callback = function(v) 
-        excludeItems.concha = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.concha = v end
 })
 
 SettingsTab:CreateToggle({
     Name = "📦 Itens Genéricos (Bounds)",
-    CurrentValue = configLoaded and savedConfig.excludeItems and savedConfig.excludeItems.item or false,
-    Callback = function(v) 
-        excludeItems.item = v 
-        saveConfig()
-    end
+    CurrentValue = false,
+    Callback = function(v) excludeItems.item = v end
 })
 
 SettingsTab:CreateSection("⛏️ Config Pedras")
 
 SettingsTab:CreateToggle({
     Name = "💎 Só Minérios (Rocks puro)",
-    CurrentValue = configLoaded and savedConfig.onlyOreRocks or false,
+    CurrentValue = false,
     Callback = function(v)
         onlyOreRocks = v
-        saveConfig()
     end
 })
 
 SettingsTab:CreateToggle({
     Name = "🚫 Ignorar Domados",
-    CurrentValue = configLoaded and savedConfig.ignoreTamedHorses or true,
+    CurrentValue = true,
     Callback = function(v)
         ignoreTamedHorses = v
-        saveConfig()
     end
 })
 
@@ -1216,11 +1102,10 @@ SettingsTab:CreateDropdown({
         "Fjord", "Friesian", "Dutch Warmblood", "Clydesdale",
         "Connemara", "Akhal-Teke", "Andalusian", "Appaloosa", "Arabian"
     },
-    CurrentOption = configLoaded and savedConfig.selectedBreed or "Qualquer",
+    CurrentOption = "Qualquer",
     Callback = function(option)
         local val = type(option) == "table" and (option[1] or option.CurrentOption) or option
         selectedBreed = tostring(val)
-        saveConfig()
     end
 })
 
@@ -1233,7 +1118,6 @@ local speedLabel = StatusTab:CreateLabel("⚡ Velocidade: 100 studs/s")
 local islandLabel = StatusTab:CreateLabel("🏝️ Ilha: ???")
 local priorityLabel = StatusTab:CreateLabel("🐎 Prioridade: Inativa")
 local pausedLabel = StatusTab:CreateLabel("⏸️ Pausados: Nenhum")
-local hopLabel = StatusTab:CreateLabel("🔄 Auto Hop: Desligado")
 
 local herdStats = StatusTab:CreateLabel("🐎 Herds: 0")
 local collectStats = StatusTab:CreateLabel("🧺 Coletados: 0")
@@ -1266,8 +1150,6 @@ task.spawn(function()
         if pausedSnowballs then pausedText = pausedText .. "Snowballs " end
         pausedLabel:Set("⏸️ Pausados: " .. (pausedText ~= "" and pausedText or "Nenhum"))
 
-        hopLabel:Set("🔄 Auto Hop: " .. (autoHopNoHorses and "🟢LIGADO (15s)" or "🔴DESLIGADO"))
-
         herdStats:Set("🐎 Herds: " .. herdCount)
         collectStats:Set("🧺 Coletados: " .. collectorCount)
         rockStats:Set("⛏️ Pedras: " .. rockCount)
@@ -1277,7 +1159,7 @@ task.spawn(function()
     end
 end)
 
-print("✅ [v25.0] Script carregado com Save e Auto Hop!")
+print("✅ [v24.7] Script carregado com sucesso!")
 
 end)
 
